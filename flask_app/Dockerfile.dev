@@ -1,0 +1,27 @@
+FROM python:3.8-slim
+
+LABEL MAINTAINER=$MAINTAINER
+
+
+# layer caching for faster builds
+COPY requirements.txt /
+RUN pip install -r /requirements.txt
+
+ADD . /var/www/
+WORKDIR /var/www/
+
+ENV GROUP_ID=1000 \
+    USER_ID=1000
+
+#dont run flask as root user for safety
+#RUN pip install gunicorn
+RUN addgroup -gid $GROUP_ID www
+RUN adduser -uid $USER_ID --gid $GROUP_ID --shell /bin/sh www
+
+
+
+USER www
+
+CMD flask run --host=0.0.0.0
+
+

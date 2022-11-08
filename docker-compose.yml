@@ -1,0 +1,73 @@
+version: "3.8"
+services:
+  mongodb:
+    image: mongo
+    volumes:
+      - ./mongo-entrypoint:/docker-entrypoint-initdb.d:ro
+      - mongo_data:/data/db
+    container_name: mongodb
+    restart: unless-stopped
+    expose:
+      - 27017
+    env_file:
+      - ./.env
+    command: mongod
+  mongo-express:
+    image: mongo-express
+    restart: unless-stopped
+    container_name: mongo_express
+    expose:
+      - 8081
+    env_file:
+      - ./.env
+    depends_on:
+      - mongodb
+  webserver:
+    build: ./nginx
+    image: nginx
+    container_name: webserver
+    restart: unless-stopped
+    environment:
+      APP_ENV: "dev"
+      APP_NAME: "webserver"
+      APP_DEBUG: "true"
+      SERVICE_NAME: "webserver"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginxdata:/var/log/nginx
+    depends_on:
+      - flask_app
+  redis:
+    image: "redis:4-alpine"
+    container_name: redis
+    expose:
+      - 6379
+  celery_worker:
+    build: ./celery_worker
+    container_name: celery_worker
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - flask_app
+    volumes:
+      - ./celery_worker:/celery_worker
+  flask_app:
+    build:
+      context: ./flask_app
+      dockerfile: Dockerfile.dev #change to prod
+    container_name: flask_app
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    expose:
+      - 5000
+    volumes:
+      - ./flask_app:/var/www
+    depends_on:
+      - mongodb
+
+volumes:
+  nginxdata:
+  mongo_data:
