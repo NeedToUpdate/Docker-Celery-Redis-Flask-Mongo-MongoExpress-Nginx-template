@@ -7,17 +7,18 @@ from pymongo import MongoClient
 from queue import Queue
 import threading
 import os
+
+# connect to all services
 app = Flask(__name__)
 celery_worker = Celery(
     'simple_worker', broker='redis://redis:6379/0', backend='redis://redis:6379/0')
-
-
 client = MongoClient(
     host='mongodb', port=27017, username=os.environ['MONGODB_USERNAME'], password=os.environ['MONGODB_PASSWORD'])
 
 db = client['new_db']
 
 
+# wrapper for Threads, since we need to stop them, this is the way to get out of their while loops
 class StoppableThread(threading.Thread):
     """Thread class with a stop() method. The thread itself has to check
     regularly for the stopped() condition."""
@@ -38,7 +39,9 @@ def index():
     return '<a href="/start">start</a>'
 
 
+# one method fills up the queue, other method consumes it
 tasks = Queue()
+# used to answer the /status route
 is_running = False
 
 
@@ -54,7 +57,7 @@ def get_random_poke():
         remain = start + seconds_bw_requests - end
         if remain > 0:
             time.sleep(remain)
-            
+
 
 def check_results():
     global tasks
@@ -70,7 +73,7 @@ def check_results():
         remain = start + seconds_bw_checks - end
         if remain > 0:
             time.sleep(remain)
-   
+
 
 threads = []
 
