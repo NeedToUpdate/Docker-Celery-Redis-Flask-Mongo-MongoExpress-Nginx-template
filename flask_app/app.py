@@ -4,9 +4,12 @@ import time
 from flask import Flask
 from celery import Celery
 from pymongo import MongoClient
+from bson.objectid import ObjectId
 from queue import Queue
 import threading
 import os
+
+MAX_PAGE = 305
 
 # connect to all services
 app = Flask(__name__)
@@ -34,24 +37,42 @@ class StoppableThread(threading.Thread):
         return self._stop_event.is_set()
 
 
-@app.route('/')
-def index():
-    return '<a href="/start">start</a>'
-
-
-# one method fills up the queue, other method consumes it
-tasks = Queue()
 # used to answer the /status route
 is_running = False
 
 
-def get_random_poke():
+@app.route('/')
+def index():
+    return '<a href="/start">start</a>' if not is_running else '<a href="/stop">stop</a>'
+
+
+images_to_get = Queue()
+
+
+@app.route('/runstartscript')
+def run_start_script():
+    # clear queue
+    while not images_to_get.empty():
+        images_to_get.get()
+    for car in db['car_names'].find({'done': False}):
+        images_to_get.put(car)
+    return 'ok'
+
+
+# one method fills up the queue, other method consumes it
+tasks = Queue()
+
+
+def get_next_page():
     global tasks
-    seconds_bw_requests = 5
-    while not threading.current_thread().stopped():
+    seconds_bw_requests = 0.01
+    while not threading.current_thread().stopped() and not images_to_get.empty():
         start = time.time()
-        id = random.randint(1, 950)
-        task = celery_worker.send_task('tasks.get_data', kwargs={'id': id})
+        search_data = images_to_get.get()
+        search_data['_id'] = str(search_data['_id'])
+        search_data['rel_id'] = str(search_data['rel_id'])
+        task = celery_worker.send_task(
+            'tasks.get_image', kwargs={'search_data': search_data})
         tasks.put(task.id)
         end = time.time()
         remain = start + seconds_bw_requests - end
@@ -61,14 +82,20 @@ def get_random_poke():
 
 def check_results():
     global tasks
-    seconds_bw_checks = 10
+    seconds_bw_checks = 1
     while not threading.current_thread().stopped():
         start = time.time()
-        while tasks.not_empty:
+        while not tasks.empty() and threading.current_thread().stopped():
             task = tasks.get()
             task_res = celery_worker.AsyncResult(task, app=celery_worker).get()
             if task_res is not None:
-                db['pokes'].insert_one(task_res)
+                rel_id = task_res['rel_id']
+                db['cars'].update_one({'_id': ObjectId(rel_id)}, {'$set': {
+                                      'image_url': task_res['image_url'], 'full_url': task_res['full_url']}})
+                db['car_names'].update_one({'_id': ObjectId(task_res['_id'])}, {
+                                           "$set": {'done': True}})
+            else:
+                tasks.put(task)
         end = time.time()
         remain = start + seconds_bw_checks - end
         if remain > 0:
@@ -82,7 +109,8 @@ threads = []
 def start_requests():
     global threads
     global is_running
-    thread = StoppableThread(target=get_random_poke)
+    run_start_script()
+    thread = StoppableThread(target=get_next_page)
     checker = StoppableThread(target=check_results)
     threads.append(thread)
     threads.append(checker)
@@ -113,12 +141,8 @@ def task_result(task_id):
     return celery_worker.AsyncResult(task_id).result
 
 
-@app.route('/all_data')
-def get_data():
-    return dumps(db['pokes'].find({}))
-
-
 if __name__ == "__main__":
     ENVIRONMENT_DEBUG = os.environ.get("APP_DEBUG", True)
     ENVIRONMENT_PORT = os.environ.get("APP_PORT", 5000)
+    run_start_script()
     app.run(host='0.0.0.0', port=ENVIRONMENT_PORT, debug=ENVIRONMENT_DEBUG)
